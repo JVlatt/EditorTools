@@ -13,6 +13,8 @@ public class AnimationSimulatorWindow : EditorWindow
     public Dictionary<int, List<AnimationClip>> animations = new Dictionary<int, List<AnimationClip>>();
     public string[] animatorsNames;
     public Dictionary<int, List<string>> animationsNames = new Dictionary<int, List<string>>();
+    public List<Vector3> positionsList = new List<Vector3>();
+
 
     public Texture2D animatorIndicator;
 
@@ -21,10 +23,13 @@ public class AnimationSimulatorWindow : EditorWindow
 
     private float _lastEditorTime = 0f;
     private float _animationTime = 0f;
+    private int _activeFrame;
+    private Vector3 _savePos = Vector3.zero;
 
     private bool _isPlaying = false;
     private bool _isPaused = false;
     private bool _isLooping = false;
+    private bool _inPlace = false;
     private bool _isReverse = false;
     private float _animationPlayRate = 1.0f;
 
@@ -40,6 +45,7 @@ public class AnimationSimulatorWindow : EditorWindow
 
     private void OnEnable()
     {
+        autoRepaintOnSceneChange = true;
         GetAnimatorsInScene();
         EditorSceneManager.sceneOpened += OnSceneOpened;
         EditorApplication.playModeStateChanged += OnModeChange;
@@ -53,7 +59,7 @@ public class AnimationSimulatorWindow : EditorWindow
         r.x = r.width - 20;
         r.width = 18;
 
-        if (animators[_animatorIndex].gameObject.GetInstanceID() == instanceID)
+        if (animators[_animatorIndex].gameObject != null && animators[_animatorIndex].gameObject.GetInstanceID() == instanceID)
         {
             GUI.Label(r, animatorIndicator);
         }
@@ -106,10 +112,11 @@ public class AnimationSimulatorWindow : EditorWindow
         {
             GUILayout.Label("Animators : ");
             Selection.activeObject = animators[_animatorIndex].gameObject;
-            
+
             int tmpIndex = EditorGUILayout.Popup(_animatorIndex, animatorsNames);
             if (tmpIndex != _animatorIndex)
             {
+                
                 _animationIndex = 0;
                 _animatorIndex = tmpIndex;
                 if (_isPlaying)
@@ -122,9 +129,14 @@ public class AnimationSimulatorWindow : EditorWindow
             GUILayout.Label("Animations : ");
             _animationIndex = EditorGUILayout.Popup(_animationIndex, animationsNames[_animatorIndex].ToArray());
 
+            GUILayout.Label("Infos : ");
+
+            GUILayout.Label("Time (seconds) : " + Math.Round(_animationTime, 2) + " s / " + Math.Round(animations[_animatorIndex][_animationIndex].length, 2) + " s");
+            GUILayout.Label("Frame : " + (int)(_animationTime * animations[_animatorIndex][_animationIndex].frameRate) + " / " + animations[_animatorIndex][_animationIndex].length * animations[_animatorIndex][_animationIndex].frameRate);
+
             GUILayout.BeginHorizontal();
             {
-                if (GUILayout.Button("Play") && !_isPlaying)
+                if (GUILayout.Button("Play") && (!_isPlaying || _isPaused))
                 {
                     if (_isPaused)
                     {
@@ -133,6 +145,8 @@ public class AnimationSimulatorWindow : EditorWindow
                     }
                     else
                     {
+                        if (_isReverse)
+                            _animationTime = animations[_animatorIndex][_animationIndex].length;
                         AnimationMode.StartAnimationMode();
                         _lastEditorTime = Time.realtimeSinceStartup;
                         _isPlaying = true;
@@ -141,6 +155,7 @@ public class AnimationSimulatorWindow : EditorWindow
                 }
                 if (GUILayout.Button("Pause") && _isPlaying)
                 {
+                    _activeFrame = (int)(_animationTime * animations[_animatorIndex][_animationIndex].frameRate);
                     _isPaused = true;
                 }
                 if (GUILayout.Button("Stop") && (_isPlaying || _isPaused))
@@ -155,10 +170,12 @@ public class AnimationSimulatorWindow : EditorWindow
             }
             GUILayout.EndHorizontal();
             _isLooping = GUILayout.Toggle(_isLooping, "Loop");
+            _isReverse = GUILayout.Toggle(_isReverse, "Reverse");
+            _inPlace = GUILayout.Toggle(_inPlace, "In Place");
             GUILayout.BeginHorizontal();
             {
                 GUILayout.Label("Animation Play Rate");
-                _animationPlayRate = (float)Math.Round(GUILayout.HorizontalSlider(_animationPlayRate, 0.1f, 3.0f),1);
+                _animationPlayRate = (float)Math.Round(GUILayout.HorizontalSlider(_animationPlayRate, 0.1f, 3.0f), 1);
                 GUILayout.Label(_animationPlayRate.ToString());
             }
             GUILayout.EndHorizontal();
@@ -167,8 +184,9 @@ public class AnimationSimulatorWindow : EditorWindow
                 if (_isPaused)
                 {
                     GUILayout.Label("Animation Frame");
-                    _animationTime = (int)GUILayout.HorizontalSlider(_animationTime, 0, animations[_animatorIndex][_animationIndex].length * animations[_animatorIndex][_animationIndex].frameRate);
-                    GUILayout.Label(((int)_animationTime).ToString());
+                    _activeFrame = (int)GUILayout.HorizontalSlider(_activeFrame, 0, animations[_animatorIndex][_animationIndex].length * animations[_animatorIndex][_animationIndex].frameRate);
+                    _animationTime = _activeFrame / animations[_animatorIndex][_animationIndex].frameRate;
+                    GUILayout.Label(((int)_activeFrame).ToString());
                 }
             }
             GUILayout.EndHorizontal();
@@ -180,13 +198,21 @@ public class AnimationSimulatorWindow : EditorWindow
     {
         if (_isPlaying)
         {
-            if(!_isPaused)
+            if (!_isPaused)
             {
                 float deltaTime = Time.realtimeSinceStartup - _lastEditorTime;
-                _animationTime += deltaTime * _animationPlayRate;
+                if (_isReverse)
+                {
+                    _animationTime -= deltaTime * _animationPlayRate;
+                }
+                else
+                {
+                    _animationTime += deltaTime * _animationPlayRate;
+                }
+                Repaint();
             }
             AnimationMode.SampleAnimationClip(animators[_animatorIndex].gameObject, animations[_animatorIndex][_animationIndex], _animationTime);
-            if (_animationTime > animations[_animatorIndex][_animationIndex].length)
+            if (_animationTime > animations[_animatorIndex][_animationIndex].length && !_isReverse)
             {
                 if (_isLooping)
                 {
@@ -200,13 +226,32 @@ public class AnimationSimulatorWindow : EditorWindow
                     AnimationMode.StopAnimationMode();
                 }
             }
+
+            if (_animationTime <= 0 && _isReverse)
+            {
+                if (_isLooping)
+                {
+                    _animationTime = animations[_animatorIndex][_animationIndex].length;
+                    _lastEditorTime = Time.realtimeSinceStartup;
+                }
+                else
+                {
+                    _isPlaying = false;
+                    _animationTime = 0f;
+                    AnimationMode.StopAnimationMode();
+                }
+            }
         }
+
+        if (_inPlace)
+            animators[_animatorIndex].gameObject.transform.localPosition = positionsList[_animatorIndex];
         _lastEditorTime = Time.realtimeSinceStartup;
     }
 
     public void GetAnimatorsInScene()
     {
         animators.Clear();
+        positionsList.Clear();
         Scene scene = SceneManager.GetActiveScene();
         int index = 0;
         GameObject[] rootGameObjects = scene.GetRootGameObjects();
@@ -216,6 +261,7 @@ public class AnimationSimulatorWindow : EditorWindow
             if (anim)
             {
                 animators.Add(anim);
+                positionsList.Add(anim.transform.localPosition);
                 if (anim.runtimeAnimatorController.animationClips.Count() > 0)
                 {
                     animations[index] = anim.runtimeAnimatorController.animationClips.ToList();
